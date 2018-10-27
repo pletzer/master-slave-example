@@ -13,6 +13,7 @@ from mpi4py import MPI
 import random
 import time
 import argparse
+import numpy
 
 parser = argparse.ArgumentParser(description='Process some integers.')
 parser.add_argument('-t', type=int, dest='numTasks', default=0, help='Number of random tasks')
@@ -34,13 +35,15 @@ status = MPI.Status()   # get MPI status object
 
 
 def workerFunction(task):
-	# simulates a function that takes a a random time to execute
+	# simulates a function that takes a random time to execute
 	tic = time.time()
 	time.sleep(10*random.random())
 	toc = time.time()
+    # return the amout of time is takes to run the task
 	return toc - tic
 
 if rank == 0:
+    results = []
     # Master process executes code below
     tasks = [i for i in range(ntasks)]
     task_index = 0
@@ -60,13 +63,13 @@ if rank == 0:
             else:
                 comm.send(None, dest=source, tag=EXIT)
         elif tag == DONE:
-            results = data
-            print("Got {} from worker {}".format(results, source))
+            results.append(data)
+            print("Got {} from worker {}".format(data, source))
         elif tag == EXIT:
             print("Worker {} exited.".format(source))
             closed_workers += 1
 
-    print("Master finishing")
+    print("Master: results: = {} sum = {}".format(results, numpy.sum(results)))
 else:
     # Worker processes execute code below
     name = MPI.Get_processor_name()
