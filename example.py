@@ -1,61 +1,88 @@
+#!/usr/bin/env python
+"""Demonstrate the task-pull paradigm for high-throughput computing
+using mpi4py. Task pull is an efficient way to perform a large number of
+independent tasks when there are more tasks than processors, especially
+when the run times vary for each task. 
+
+This code is over-commented for instructional purposes.
+
+This example was contributed by Craig Finch (cfinch@ieee.org).
+Inspired by http://math.acadiau.ca/ACMMaC/Rmpi/index.html
 """
-"""
-import numpy
-import time
 from mpi4py import MPI
+import random
+import time
+import argparse
 
-READY, BUSY, BYE = 1, 2, 3
-STATUS_LINE, WORK_LINE = 100, 101
+parser = argparse.ArgumentParser(description='Process some integers.')
+parser.add_argument('-t', type=int, dest='numTasks', default=0, help='Number of random tasks')
 
-
-def performTask(data):
-    time.sleep(2) # simulates a long task
-
-
-comm = MPI.COMM_WORLD
-pe = comm.Get_rank()
-nprocs = comm.Get_size()
-master = 0
-worker = 1
-
-ntasks = 3
-
-if pe == master:
-
-	# all the workers are ready
-	workerStatus = {worker: READY for worker in range(1, nprocs)}
-
-	for taskId in range(ntasks):
-
-		# find a worker who is ready to take on some new tasks
-		for worker, status in workerStatus.items():
-
-			if status == READY:
-
-				comm.send(taskId, dest=worker, tag=WORK_LINE)
-				workerStatus[worker] = BUSY
-				print('worker {} is now busy...'.format(worker))
-				break
-
-	# tell the workers to shutdown
-	for worker in range(1, nprocs):
-		comm.send(None, dest=worker, tag=WORK_LINE)
+args = parser.parse_args()
+ntasks = args.numTasks
 
 
+random.seed(1234)
+
+# Define MPI message tags
+READY, DONE, EXIT, START = 0, 1, 2, 3
+
+# Initializations and preliminaries
+comm = MPI.COMM_WORLD   # get MPI communicator object
+size = comm.size        # total number of processes
+rank = comm.rank        # rank of this process
+status = MPI.Status()   # get MPI status object
+
+
+def workerFunction(task):
+	# simulates a function that takes a a random time to execute
+	tic = time.time()
+	time.sleep(10*random.random())
+	toc = time.time()
+	return toc - tic
+
+if rank == 0:
+    # Master process executes code below
+    tasks = [i for i in range(ntasks)]
+    task_index = 0
+    num_workers = size - 1
+    closed_workers = 0
+    print("Master starting with {} workers".format(num_workers))
+    while closed_workers < num_workers:
+        data = comm.recv(source=MPI.ANY_SOURCE, tag=MPI.ANY_TAG, status=status)
+        source = status.Get_source()
+        tag = status.Get_tag()
+        if tag == READY:
+            # Worker is ready, so send it a task
+            if task_index < len(tasks):
+                comm.send(tasks[task_index], dest=source, tag=START)
+                print("Sending task %d to worker %d" % (task_index, source))
+                task_index += 1
+            else:
+                comm.send(None, dest=source, tag=EXIT)
+        elif tag == DONE:
+            results = data
+            print("Got {} from worker {}".format(results, source))
+        elif tag == EXIT:
+            print("Worker {} exited.".format(source))
+            closed_workers += 1
+
+    print("Master finishing")
 else:
+    # Worker processes execute code below
+    name = MPI.Get_processor_name()
+    print("I am a worker with rank {} on {}.".format(rank, name))
+    while True:
+        comm.send(None, dest=0, tag=READY)
+        task = comm.recv(source=0, tag=MPI.ANY_TAG, status=status)
+        tag = status.Get_tag()
+        
+        if tag == START:
+            # Do the work here
+            result = workerFunction(task)
+            comm.send(result, dest=0, tag=DONE)
+        elif tag == EXIT:
+            break
 
-	# workers
-
-	status = READY
-	while status != BYE:
-		# get order
-		data = comm.recv(source=master, tag=WORK_LINE)
-		if data is None:
-			status = BYE
-			print('[{}] is shutting down...'.format(pe))
-		else:
-			print('[{}] performs task {}'.format(pe, data))
-			performTask(data)
-			#comm.send(READY, dest=master, tag=STATUS_LINE)
+    comm.send(None, dest=0, tag=EXIT)
 
 
